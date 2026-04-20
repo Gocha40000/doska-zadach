@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Доска Задач Команды</title>
+    <!-- Подключаем React, Tailwind и Appwrite через CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/appwrite@14.0.1"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .loader {
+            border-top-color: #db2777;
+            animation: spinner 1.5s linear infinite;
+        }
+        @keyframes spinner {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { Client, Databases, ID } = Appwrite;
+
+        // --- ТВОИ НАСТРОЙКИ APPWRITE ---
+        const client = new Client()
+            .setEndpoint('https://cloud.appwrite.io/v1')
+            .setProject('69e54170003abc1aa58d');
+
+        const databases = new Databases(client);
+        const DATABASE_ID = '69e541c0003778a4e29d';
+        const COLLECTION_ID = 'board_tasks';
+
+        const TEAM_MEMBERS = [
+            'Гоша (темщик - admin)',
+            'Теть Кристина (admin)',
+            'Алена (сайтолог)',
+            'Николай (писарь)'
+        ];
+
+        // Иконки SVG
+        const IconPlus = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>;
+        const IconTrash = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>;
+        const IconCheck = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>;
+
+        function App() {
+            const [tasks, setTasks] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [currentUserName, setCurrentUserName] = useState('Гоша (темщик - админ)');
+            const [newTask, setNewTask] = useState({ title: '', description: '', assignee: '', dueDate: '' });
+
+            const isAdmin = currentUserName === 'Гоша (темщик - админ)' || currentUserName === 'Теть Кристина (админ)';
+
+            // Загрузка данных
+            const fetchTasks = async () => {
+                try {
+                    const response = await databases.listDocuments(DATABASE_ID, COLLECTION_ID);
+                    setTasks(response.documents);
+                    setError(null);
+                } catch (e) {
+                    console.error("Ошибка загрузки:", e);
+                    setError("Не удалось загрузить данные. Проверь настройки CORS в Appwrite.");
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            useEffect(() => {
+                fetchTasks();
+                
+                // Вместо WebSocket используем Polling (опрос раз в 5 секунд)
+                // так как Canvas блокирует WSS соединения
+                const interval = setInterval(fetchTasks, 5000);
+                
+                return () => clearInterval(interval);
+            }, []);
+
+            const addTask = async (e) => {
+                e.preventDefault();
+                if (!newTask.title) return;
+                try {
+                    await databases.createDocument(DATABASE_ID, COLLECTION_ID, ID.unique(), {
+                        title: newTask.title,
+                        description: newTask.description || "",
+                        assignee: newTask.assignee || "",
+                        dueDate: newTask.dueDate || "",
+                        status: 'todo'
+                    });
+                    setNewTask({ title: '', description: '', assignee: '', dueDate: '' });
+                    setIsModalOpen(false);
+                    fetchTasks();
+                } catch (e) {
+                    console.error("Ошибка при создании:", e);
+                    alert("Ошибка при сохранении задачи!");
+                }
+            };
+
+            const updateStatus = async (id, status) => {
+                try {
+                    await databases.updateDocument(DATABASE_ID, COLLECTION_ID, id, { status });
+                    fetchTasks();
+                } catch (e) {
+                    console.error(e);
+                }
+            };
+
+            const deleteTask = async (id) => {
+                if (!isAdmin) return;
+                try {
+                    await databases.deleteDocument(DATABASE_ID, COLLECTION_ID, id);
+                    fetchTasks();
+                } catch (e) {
+                    console.error(e);
+                }
+            };
+
+            if (loading && tasks.length === 0) return (
+                <div className="h-screen flex flex-col items-center justify-center gap-4">
+                    <div className="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12"></div>
+                    <p className="font-bold text-pink-600">Подключение к базе...</p>
+                </div>
+            );
+
+            const renderColumn = (id, title, color, dot) => (
+                <div className={`${color} p-4 rounded-2xl border border-slate-200 min-h-[500px] flex flex-col shadow-sm`}>
+                    <div className="flex items-center gap-2 mb-4">
+                        <div className={`w-3 h-3 rounded-full ${dot}`}></div>
+                        <h2 className="text-xs font-extrabold uppercase tracking-widest text-slate-600">{title}</h2>
+                    </div>
+                    <div className="space-y-3 flex-1">
+                        {tasks.filter(t => t.status === id).map(task => (
+                            <div key={task.$id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 group relative">
+                                <div className="absolute top-4 right-4 flex gap-2">
+                                    {isAdmin && <button onClick={() => deleteTask(task.$id)} className="text-slate-200 hover:text-red-500 transition-colors"><IconTrash /></button>}
+                                    {task.status !== 'done' && <button onClick={() => updateStatus(task.$id, 'done')} className="text-slate-200 hover:text-green-500 transition-colors"><IconCheck /></button>}
+                                </div>
+                                <h3 className={`font-bold pr-12 ${task.status === 'done' ? 'line-through text-slate-300' : 'text-slate-800'}`}>{task.title}</h3>
+                                {task.description && <p className="text-sm text-slate-500 mt-1 mb-3 line-clamp-2">{task.description}</p>}
+                                <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 mt-2">
+                                    <span className="bg-slate-50 px-2 py-1 rounded uppercase border border-slate-100">{task.assignee || 'Без имени'}</span>
+                                    {task.dueDate && <span>{new Date(task.dueDate).toLocaleDateString()}</span>}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="max-w-6xl mx-auto p-4 md:p-6">
+                    {error && (
+                        <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl mb-6 text-sm font-medium">
+                            {error} <br/>
+                            <span className="text-xs opacity-75 font-normal">Зайди в Appwrite -> Project Settings -> Platforms и добавь домен (или localhost) в список разрешенных.</span>
+                        </div>
+                    )}
+
+                    <header className="flex flex-col md:flex-row justify-between items-center mb-8 bg-white p-4 rounded-2xl shadow-sm border border-slate-100 gap-4">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-pink-600 p-2 rounded-lg text-white font-black italic shadow-lg shadow-pink-100">TASK</div>
+                            <h1 className="text-xl font-black tracking-tight">ДОСКА КОМАНДЫ</h1>
+                        </div>
+                        <div className="flex gap-4 items-center w-full md:w-auto">
+                            <select value={currentUserName} onChange={e => setCurrentUserName(e.target.value)} className="flex-1 md:flex-none text-sm font-bold border-none bg-slate-50 p-2.5 rounded-xl cursor-pointer outline-none hover:bg-slate-100 transition-colors">
+                                {TEAM_MEMBERS.map(m => <option key={m} value={m}>{m}</option>)}
+                            </select>
+                            <button onClick={() => setIsModalOpen(true)} className="bg-pink-600 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-pink-700 transition-all flex items-center gap-2 shadow-lg shadow-pink-100 active:scale-95">
+                                <IconPlus /> ДОБАВИТЬ
+                            </button>
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        {renderColumn('todo', 'К выполнению', 'bg-slate-100/50', 'bg-slate-400')}
+                        {renderColumn('inProgress', 'В работе', 'bg-blue-50', 'bg-blue-500')}
+                        {renderColumn('done', 'Готово', 'bg-green-50', 'bg-green-500')}
+                    </div>
+
+                    {isModalOpen && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+                            <div className="bg-white rounded-3xl w-full max-w-md p-6 md:p-8 shadow-2xl animate-in zoom-in-95 duration-200">
+                                <h2 className="text-2xl font-black mb-6">Новое дело</h2>
+                                <form onSubmit={addTask} className="space-y-4">
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Название</label>
+                                        <input type="text" required placeholder="Что нужно сделать?" className="w-full p-3 bg-slate-50 border-none rounded-xl font-bold focus:ring-2 focus:ring-pink-500 outline-none" value={newTask.title} onChange={e => setNewTask({...newTask, title: e.target.value})} />
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Описание</label>
+                                        <textarea placeholder="Любые подробности..." className="w-full p-3 bg-slate-50 border-none rounded-xl h-24 focus:ring-2 focus:ring-pink-500 outline-none resize-none" value={newTask.description} onChange={e => setNewTask({...newTask, description: e.target.value})} />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Кто делает?</label>
+                                            <select className="w-full p-3 bg-slate-50 border-none rounded-xl font-bold focus:ring-2 focus:ring-pink-500 outline-none cursor-pointer" value={newTask.assignee} onChange={e => setNewTask({...newTask, assignee: e.target.value})}>
+                                                <option value="">Не выбран</option>
+                                                {TEAM_MEMBERS.map(m => <option key={m} value={m}>{m}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Срок</label>
+                                            <input type="date" className="w-full p-3 bg-slate-50 border-none rounded-xl font-bold focus:ring-2 focus:ring-pink-500 outline-none" value={newTask.dueDate} onChange={e => setNewTask({...newTask, dueDate: e.target.value})} />
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-4 mt-8">
+                                        <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 font-bold text-slate-400 hover:text-slate-600 transition-colors">Отмена</button>
+                                        <button type="submit" className="flex-1 bg-pink-600 text-white py-4 rounded-2xl font-black hover:bg-pink-700 transition-all shadow-lg shadow-pink-100 active:scale-95">СОЗДАТЬ</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
